@@ -26,8 +26,13 @@ static const char MUSIC_PLAYER_PATH[] = "/usr/local/bin/mplayer";
 static const char MUSIC_PLAYER_PATH[] = "/usr/bin/mplayer";
 #endif
 
+static char REMINDER_PATH[] = "./telegram_bot/voice.ogg";
+
 pid_t fork_song_pid = 0;
 //*******************************************
+#define CANCEL_SONG -2
+#define PLAY_REMINDER -10
+#define NEXT_ALARM_DELAY 20
 
 
 //************* MOTOR DEFINITION ***************
@@ -47,13 +52,19 @@ pid_t fork_song_pid = 0;
 //*******************************************
 
 
-/*
-void  SIGINT_handler(int sig)
-{
-	printf("Exit from SIGINT\n");
+
+void  SIGTERM_fork_handler(int sig) {
+	//system("ps -a");
+	//system("echo ------ ");
+	fprintf(stderr, "Killing mplayer\n");
+	system("killall mplayer");
+	
+	sleep(2);
+	//system("ps -a");
+	fprintf(stderr, "(FORK) Exit from SIGTERM\n");
 	exit(0);
 }
-*/
+
 
 //************* SERVER CODE ***************
 struct url_data {
@@ -251,16 +262,31 @@ void * run_infrared(void *voidData) {
 			digitalWrite(RELAY_2, RELAY_DISABLE);
 		}
 		if(key == 0x47) {
-			if ((fork_song_pid!=0)) {
+			if (fork_song_pid!=0) {
+				fprintf(stderr, "Stopping alarm pid %d from IR\n", fork_song_pid);
 				//printf("Stopping alarm\n");
 				if (kill(fork_song_pid,0) == 0) {
-					kill(fork_song_pid, SIGINT);
+					while( kill(fork_song_pid, SIGTERM) != 0 ) {
+						fprintf(stderr, "error to kill\n");
+						sleep(2);
+					}
+					//sleep(2);
+					//system("ps -a");
 					fork_song_pid = 0;
 				} else {
 					fprintf(stderr, "pid do not exists");
 				}
 			}
 		}
+		if (key == 0x07) {
+			system("amixer set PCM,0 $(expr $(amixer get PCM | grep -o [0-9]*% | sed 's/%//') - 5)%");
+			system("( speaker-test -t sine -c 2 -s 2 -f 800 & TASK_PID=$! ; sleep 0.09 ; kill -s 2 $TASK_PID ) > /dev/null");
+		}
+
+		if (key == 0x15) {
+			system("amixer set PCM,0 $(expr $(amixer get PCM | grep -o [0-9]*% | sed 's/%//') + 5)%");
+			system("( speaker-test -t sine -c 2 -s 2 -f 800 & TASK_PID=$! ; sleep 0.09 ; kill -s 2 $TASK_PID ) > /dev/null");
+		}	
 	}
 	return NULL;
 }
@@ -272,9 +298,9 @@ int main(int argc, char* argv[]) {
 	// SERVER
 	//pid_t fork_song_pid = 0;
 	char* data = NULL;
-    	int play_song_secs;
-    	int move_motor_secs;
-    	char song_to_play_path[200];
+	int play_song_secs;
+	int move_motor_secs;
+	char song_to_play_path[200];
 	// MOTOR
 	pthread_t thread_motor;
 	// INFRARED
@@ -329,24 +355,112 @@ int main(int argc, char* argv[]) {
 			}
 		}
 
-        if (play_song_secs >= 0) {
-			fork_song_pid = fork();
-			if (fork_song_pid == 0) {
-				sleep(play_song_secs);
-				execl(MUSIC_PLAYER_PATH, MUSIC_PLAYER, song_to_play_path, NULL);
-				return 0;
-			}
-		} else {
-			if ((play_song_secs==-2) && (fork_song_pid!=0)) {
-				//printf("Stopping alarm\n");
+
+
+
+
+		if (play_song_secs >= 0) {
+
+			// KILL OLD PROCESS
+			if (fork_song_pid!=0) {
+				fprintf(stderr, "Stopping alarm pid %d \n", fork_song_pid);
 				if (kill(fork_song_pid,0) == 0) {
-					kill(fork_song_pid, SIGINT);
+					while( kill(fork_song_pid, SIGTERM) != 0 ) {
+						fprintf(stderr, "error to kill\n");
+						sleep(2);
+					}
+					//sleep(2);
+					//system("ps -a");
 					fork_song_pid = 0;
 				} else {
 					fprintf(stderr, "pid do not exists");
 				}
 			}
-        }
+
+
+		    fork_song_pid = fork();
+		    if (fork_song_pid == 0) {
+				sleep(play_song_secs);
+				//execl(MUSIC_PLAYER_PATH, MUSIC_PLAYER, song_to_play_path, NULL);
+				if (signal(SIGTERM, SIGTERM_fork_handler) == SIG_ERR) {
+					fprintf(stderr, "SIGTERM install error\n");
+					exit(1);
+				}
+
+				char song_to_play_command[200];
+				sprintf(song_to_play_command, "%s %s", MUSIC_PLAYER, song_to_play_path);
+				while(true) {
+					system(song_to_play_command);
+
+					sleep(NEXT_ALARM_DELAY);
+				}
+
+				return 0;
+			}
+			
+		}
+
+		if (play_song_secs==PLAY_REMINDER) {
+
+			// KILL OLD PROCESS
+			if (fork_song_pid!=0) {
+				fprintf(stderr, "Stopping alarm pid %d \n", fork_song_pid);
+				if (kill(fork_song_pid,0) == 0) {
+					while( kill(fork_song_pid, SIGTERM) != 0 ) {
+						fprintf(stderr, "error to kill\n");
+						sleep(2);
+					}
+					//sleep(2);
+					//system("ps -a");
+					fork_song_pid = 0;
+				} else {
+					fprintf(stderr, "pid do not exists");
+				}
+			}
+
+
+			fork_song_pid = fork();
+			if (fork_song_pid == 0) {
+				//execl(MUSIC_PLAYER_PATH, MUSIC_PLAYER, REMINDER_PATH, NULL);
+				if (signal(SIGTERM, SIGTERM_fork_handler) == SIG_ERR) {
+					fprintf(stderr, "SIGTERM install error\n");
+					exit(1);
+				}
+
+				char song_to_play_command[200];
+				sprintf(song_to_play_command, "%s %s", MUSIC_PLAYER, REMINDER_PATH);
+				while(true) {
+
+					system(song_to_play_command);
+
+					sleep(NEXT_ALARM_DELAY);
+				}
+
+				
+
+				return 0;
+		    }
+		    
+		}
+
+		if (play_song_secs==CANCEL_SONG) {
+			fprintf(stderr, "Stopping alarm pid %d from SERVER\n", fork_song_pid);
+
+			if (kill(fork_song_pid,0) == 0) {
+				while( kill(fork_song_pid, SIGTERM) != 0 ) {
+						fprintf(stderr, "error to kill\n");
+						sleep(2);
+				}
+				//sleep(2);
+				//system("ps -a");
+				fork_song_pid = 0;
+			} else {
+				fprintf(stderr, "pid do not exists");
+			}
+		}
+
+
+
 
 		sleep(SECONDS_NEXT_REQUEST);
 	}
